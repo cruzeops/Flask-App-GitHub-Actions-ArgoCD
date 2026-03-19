@@ -62,3 +62,8 @@ jobs:
       - name: Push Docker image
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/demo-app:${{ env.VERSION }}
+
+    # Update the Kubernetes Manifest file with the new Docker image tag
+      - name: Update Kubernetes manifest
+        run: |
+          sed -i "s|image: cruzeops/demo-app:*|image: cruzeops/demo-app:${{ env.VERSION }}|g" deploy/deploy.yaml

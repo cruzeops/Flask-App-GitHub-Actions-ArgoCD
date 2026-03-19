@@ -14,6 +14,6 @@ spec:
     spec:
       containers:
       - name: demo-app
-        image: andynze4/flask-app:c084f6c
+        image: cruzeops/demo-app:latest
         ports:
         - containerPort: 5001
