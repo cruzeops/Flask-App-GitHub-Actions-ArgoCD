@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      VERSION: ""
 
     steps:
     # checkout the code, set up Python, install dependencies, run tests, and build the Docker image
@@ -31,7 +33,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flask8
+          pip install flake8
 
     # Test the code
       - name: Run Linting tests
@@ -44,6 +46,19 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-    #   - name: Build Docker image
-    #     run: |
-    #       docker build -t flask-app:latest .
+    # Create a Docker tag with date and time for versioning
+      - name: Create Docker tag
+        id: version
+        run: |
+          VERSION=v$(date +'%m%d%H%M%S')
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    # Build the Docker image
+      - name: Build Docker image
+        run: |
+          docker build . -t ${{ secrets.DOCKER_USERNAME }}/demo-app:${{ env.VERSION }}
+
+    # Push the docker image to Docker Hub with both the version tag and the latest tag      
+      - name: Push Docker image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/demo-app:${{ env.VERSION }}
