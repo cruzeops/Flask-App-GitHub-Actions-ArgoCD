@@ -66,4 +66,4 @@ jobs:
     # Update the Kubernetes Manifest file with the new Docker image tag
       - name: Update Kubernetes manifest
         run: |
-          sed -i "s|image: cruzeops/demo-app:*|image: cruzeops/demo-app:${{ env.VERSION }}|g" deploy/deploy.yaml
+          sed -i "s|cruzeops/demo-app:*|cruzeops/demo-app:${{ env.VERSION }}|g" deploy/deploy.yaml
