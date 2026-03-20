@@ -41,7 +41,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-          # cache: 'pip'      # Enables pip dependency caching for faster builds
+          cache: 'pip'      # Enables pip dependency caching for faster builds
 
       # Step 3: Enable Docker Buildx (for advanced builds)
       - name: Set up Docker Buildx
