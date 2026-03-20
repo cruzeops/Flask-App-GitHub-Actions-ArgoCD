@@ -20,6 +20,7 @@ jobs:
 
     # Environment variables used across the workflow
     env:
+      IMAGE_VERSION: ""  # Will be set dynamically during the workflow
       IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/demo-app
       GITOPS_REPO: ${{ vars.ARGOCD_REPO }}
       GITOPS_BRANCH: ${{ vars.ARGOCD_BRANCH }}
@@ -53,7 +54,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flake8 pytest pytest-cov sonar-scanner-cli trivy
+          pip install flake8 pytest pytest-cov  trivy
 
       # Step 5: Run linting (code quality checks)
       - name: Run lint checks
