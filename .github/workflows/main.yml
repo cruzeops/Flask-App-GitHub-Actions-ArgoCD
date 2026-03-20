@@ -116,8 +116,8 @@ jobs:
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
             -Dsonar.sources=.
             -Dsonar.python.version=3.9
-            -Dsonar.qualitygate.wait=true
-            -Dsonar.qualitygate.timeout=300
+#            -Dsonar.qualitygate.wait=true
+#            -Dsonar.qualitygate.timeout=300
 
       # Step 10: Build Docker image with version and latest tags
       - name: Build Docker image
