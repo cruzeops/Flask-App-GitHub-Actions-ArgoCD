@@ -115,6 +115,7 @@ on:
     paths:
       - '**.*'
       - 'Dockerfile'
+
 permissions:
   contents: write
   
