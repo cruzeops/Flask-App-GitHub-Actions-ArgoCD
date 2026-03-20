@@ -10,12 +10,16 @@ on:
       
 permissions:
   contents: write
-  
+
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
       VERSION: ""
+      IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/demo-app
+      GITOPS_REPO: ${{ vars.ARGOCD_REPO || 'your-org/argocd-manifests' }}
+      GITOPS_BRANCH: ${{ vars.ARGOCD_BRANCH || 'main' }}
+      GITOPS_MANIFEST_PATH: ${{ vars.ARGOCD_MANIFEST_PATH || 'deploy/deploy.yaml' }}
 
     steps:
     # checkout the code, set up Python, install dependencies, run tests, and build the Docker image
@@ -59,31 +63,39 @@ jobs:
     # Build the Docker image
       - name: Build Docker image
         run: |
-          docker build . -t ${{ secrets.DOCKER_USERNAME }}/demo-app:${{ env.VERSION }}
+          docker build . -t ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
 
     # Push the docker image to Docker Hub with both the version tag and the latest tag      
       - name: Push Docker image
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/demo-app:${{ env.VERSION }}
+          docker push ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
 
-    # Update the Kubernetes Manifest file with the new Docker image tag
-      - name: Update Kubernetes manifest
+    # Checkout the separate GitOps repository that ArgoCD watches
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          ref: ${{ env.GITOPS_BRANCH }}
+          token: ${{ secrets.ARGOCD_REPO_TOKEN }}
+          path: gitops
+
+    # Update the Kubernetes manifest in the GitOps repository
+      - name: Update GitOps manifest
         run: |
-          sed -i "s|cruzeops/demo-app:.*|cruzeops/demo-app:${{ env.VERSION }}|g" deploy/deploy.yaml
-          cat deploy/deploy.yaml
+          sed -i "s|image: .*|image: ${{ env.IMAGE_NAME }}:${{ env.VERSION }}|g" "gitops/${{ env.GITOPS_MANIFEST_PATH }}"
+          grep "image:" "gitops/${{ env.GITOPS_MANIFEST_PATH }}"
 
-          echo "After update:"
-          grep "image:" deploy/deploy.yaml || true
-
-    # Commit and push the updated manifest file back to the repository
-      - name: Commit updated manifest
+    # Commit and push the manifest change to the GitOps repository
+      - name: Commit updated GitOps manifest
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add deploy/deploy.yaml
-          git commit -m "Update manifest image tag to ${{ env.VERSION }}" || echo "No changes to commit"
+          cd gitops
+          git add "${{ env.GITOPS_MANIFEST_PATH }}"
+          git commit -m "Update demo-app image tag to ${{ env.VERSION }}" || echo "No changes to commit"
 
-      - name: Push updated manifest
+      - name: Push updated GitOps manifest
         run: |
-          git push origin master
+          cd gitops
+          git push origin "${{ env.GITOPS_BRANCH }}"
