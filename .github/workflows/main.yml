@@ -30,6 +30,14 @@ jobs:
 
     steps:
 
+      - name: Debug workflow context
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Commit SHA: $GITHUB_SHA"
+          echo "Workflow file contents around install step:"
+          nl -ba .github/workflows/main.yml | sed -n '1,180p'
+
       # Step 1: Checkout application source code
       - name: Checkout application repo
         uses: actions/checkout@v4
