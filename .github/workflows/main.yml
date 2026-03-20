@@ -1,53 +1,69 @@
-name: CI Build Scan and Update GitOps
+name: CI Build and Deploy via GitOps
 
 on:
   push:
     branches:
-      - master              # Trigger pipeline when code is pushed to master
-  workflow_dispatch:        # Allow manual trigger from GitHub UI
+      - master              # Run automatically when code is pushed to master
+  workflow_dispatch:        # Allow manual execution from the GitHub Actions UI
 
 permissions:
-  contents: write           # Needed to push changes to GitOps repo
+  contents: write           # Required for pushing manifest updates to the GitOps repo
 
-# Prevent multiple runs from conflicting when pushing rapidly
+# Prevent overlapping runs on the same branch
 concurrency:
   group: demo-app-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-test-scan-update-gitops:
-    runs-on: ubuntu-latest  # GitHub-hosted runner
+  # ============================================================
+  # JOB 1: BUILD
+  # This job performs CI tasks:
+  # - checkout source code
+  # - set up Python
+  # - install dependencies
+  # - lint and test the code
+  # - run SonarQube scan
+  # - build Docker image
+  # - scan image with Trivy
+  # - push Docker image to Docker Hub
+  #
+  # At the end, it exposes image metadata (tag/version) so the
+  # deploy job can reuse it safely.
+  # ============================================================
+  build:
+    name: Build, Scan and Push Image
+    runs-on: ubuntu-latest
 
-    # Environment variables used across the workflow
     env:
-      IMAGE_VERSION: ""  # Will be set dynamically during the workflow
       IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/demo-app
-      GITOPS_REPO: ${{ vars.ARGOCD_REPO }}
-      GITOPS_BRANCH: ${{ vars.ARGOCD_BRANCH }}
-      GITOPS_MANIFEST_PATH: ${{ vars.ARGOCD_MANIFEST_PATH }}
       SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
       SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
 
-    steps:
+    # These outputs are passed to the deploy job
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image_version: ${{ steps.meta.outputs.image_version }}
+      image_latest: ${{ steps.meta.outputs.image_latest }}
 
-      # Step 1: Checkout application source code
+    steps:
+      # Step 1: Download application source code from the current repo
       - name: Checkout application repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0    # Full history needed for SonarQube analysis
+          fetch-depth: 0    # Full git history helps SonarQube analyze branches properly
 
-      # Step 2: Set up Python runtime environment
+      # Step 2: Install Python runtime needed for the app and test tools
       - name: Set up Python 3.9
         uses: actions/setup-python@v5
         with:
           python-version: '3.9'
-          cache: 'pip'      # Enables pip dependency caching for faster builds
+          cache: 'pip'      # Speeds up dependency installs using pip cache
 
-      # Step 3: Enable Docker Buildx (for advanced builds)
+      # Step 3: Prepare Docker Buildx for Docker builds
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Step 4: Install project dependencies
+      # Step 4: Install project dependencies and developer tooling
       - name: Install dependencies
         shell: bash
         run: |
@@ -56,14 +72,14 @@ jobs:
           pip install -r requirements.txt
           pip install flake8 pytest pytest-cov
 
-      # Step 5: Run linting (code quality checks)
+      # Step 5: Run linting to catch code-style and simple quality issues
       - name: Run lint checks
         shell: bash
         run: |
           set -euo pipefail
-          flake8 --ignore=E501,F401 .   
+          flake8 --ignore=E501,F401 .
 
-      # Step 6: Run unit tests
+      # Step 6: Run unit tests if test files exist
       - name: Run unit tests
         shell: bash
         run: |
@@ -74,30 +90,37 @@ jobs:
             echo "No test files found, skipping unit tests for now."
           fi
 
-      # Step 7: Authenticate to Docker Hub
+      # Step 7: Log in to Docker Hub so this runner can push images
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Step 8: Generate version tags for Docker image
+      # Step 8: Generate image tags and expose them to later steps and next job
       - name: Create image tags
         id: meta
         shell: bash
         run: |
           set -euo pipefail
+
           SHORT_SHA="${GITHUB_SHA::7}"
           VERSION="v${SHORT_SHA}-${GITHUB_RUN_NUMBER}"
+          IMAGE_VERSION="${IMAGE_NAME}:${VERSION}"
+          IMAGE_LATEST="${IMAGE_NAME}:latest"
 
+          # Export values for later steps in this job
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+          echo "IMAGE_VERSION=$IMAGE_VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=$IMAGE_LATEST" >> "$GITHUB_ENV"
 
-          # Full image tags
-          echo "IMAGE_VERSION=${IMAGE_NAME}:${VERSION}" >> "$GITHUB_ENV"
-          echo "IMAGE_LATEST=${IMAGE_NAME}:latest" >> "$GITHUB_ENV"
+          # Export values as job outputs for the deploy job
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "image_version=$IMAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "image_latest=$IMAGE_LATEST" >> "$GITHUB_OUTPUT"
 
-      # Step 9: Run SonarQube analysis and wait for quality gate
+      # Step 9: Run SonarQube code analysis
       - name: SonarQube Cloud Scan
         uses: SonarSource/sonarqube-scan-action@v7
         env:
@@ -112,7 +135,7 @@ jobs:
             -Dsonar.qualitygate.wait=false
             -Dsonar.qualitygate.timeout=300
 
-      # Step 10: Build Docker image with version and latest tags
+      # Step 10: Build Docker image with both versioned and latest tags
       - name: Build Docker image
         shell: bash
         run: |
@@ -121,32 +144,66 @@ jobs:
             -t "${IMAGE_VERSION}" \
             -t "${IMAGE_LATEST}"
 
-      # Step 11: Scan Docker image for vulnerabilities (Trivy)
+      # Step 11: Scan the built image for HIGH and CRITICAL vulnerabilities
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@0.35.0
         with:
           scan-type: image
           image-ref: ${{ env.IMAGE_VERSION }}
           format: table
-          exit-code: '1'                     # Fail pipeline on issues
+          exit-code: '1'
           ignore-unfixed: true
-          severity: CRITICAL,HIGH            # Only block on serious issues
+          severity: CRITICAL,HIGH
 
-      # Step 12: Push versioned image (only if scan passed)
+      # Step 12: Push immutable versioned image to Docker Hub
       - name: Push versioned Docker image
         shell: bash
         run: |
           set -euo pipefail
           docker push "${IMAGE_VERSION}"
 
-      # Step 13: Push "latest" tag
+      # Step 13: Push latest image tag for convenience
       - name: Push latest Docker image
         shell: bash
         run: |
           set -euo pipefail
           docker push "${IMAGE_LATEST}"
 
-      # Step 14: Checkout GitOps repository (separate repo watched by ArgoCD)
+  # ============================================================
+  # JOB 2: DEPLOY
+  # This job performs CD-related GitOps tasks:
+  # - checks out the GitOps repo that ArgoCD watches
+  # - updates the Kubernetes manifest with the new image tag
+  # - commits and pushes the change
+  #
+  # ArgoCD then detects the GitOps repo update and deploys it.
+  # ============================================================
+  deploy:
+    name: Update GitOps Repo
+    runs-on: ubuntu-latest
+    needs: build            # This job only runs if the build job succeeds
+
+    env:
+      GITOPS_REPO: ${{ vars.ARGOCD_REPO }}
+      GITOPS_BRANCH: ${{ vars.ARGOCD_BRANCH }}
+      GITOPS_MANIFEST_PATH: ${{ vars.ARGOCD_MANIFEST_PATH }}
+
+      # Pull values from the build job outputs
+      VERSION: ${{ needs.build.outputs.version }}
+      IMAGE_VERSION: ${{ needs.build.outputs.image_version }}
+      IMAGE_LATEST: ${{ needs.build.outputs.image_latest }}
+
+    steps:
+      # Step 14: Show received values from the build job for debugging
+      - name: Debug received image metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "VERSION=${VERSION}"
+          echo "IMAGE_VERSION=${IMAGE_VERSION}"
+          echo "IMAGE_LATEST=${IMAGE_LATEST}"
+
+      # Step 15: Checkout the GitOps repository that ArgoCD monitors
       - name: Checkout GitOps repo
         uses: actions/checkout@v4
         with:
@@ -155,53 +212,58 @@ jobs:
           token: ${{ secrets.ARGOCD_REPO_TOKEN }}
           path: gitops
 
-      # Step 15: Ensure manifest file exists before modifying
+      # Step 16: Confirm the manifest file exists before modifying it
       - name: Validate GitOps manifest path exists
         shell: bash
         run: |
           set -euo pipefail
           test -f "gitops/${GITOPS_MANIFEST_PATH}"
 
-      # Step 16: Show current deployed image in manifest (for debugging/visibility)
+      # Step 17: Show the current image value in the manifest before updating
       - name: Show current image in GitOps manifest
         shell: bash
         run: |
           set -euo pipefail
           grep "image:" "gitops/${GITOPS_MANIFEST_PATH}"
 
-      # Step 17: Update image tag in Kubernetes manifest
+      # Step 18: Update the Kubernetes manifest with the new Docker image tag
       - name: Update GitOps manifest image tag
         shell: bash
         run: |
           set -euo pipefail
 
-          # Replace existing image line with new version
+          # Stop immediately if IMAGE_VERSION is empty
+          if [ -z "${IMAGE_VERSION}" ]; then
+            echo "ERROR: IMAGE_VERSION is empty. Aborting update."
+            exit 1
+          fi
+
+          # Replace the image line in the manifest with the new image tag
           sed -i "s|image: .*|image: ${IMAGE_VERSION}|g" \
             "gitops/${GITOPS_MANIFEST_PATH}"
 
-          # Verify change
           echo "Updated manifest:"
           grep "image:" "gitops/${GITOPS_MANIFEST_PATH}"
 
-      # Step 18: Commit change to GitOps repo
+      # Step 19: Commit the manifest change to the GitOps repository
       - name: Commit GitOps manifest change
         shell: bash
         run: |
           set -euo pipefail
           cd gitops
 
-          # Configure Git identity
+          # Configure git identity for the workflow bot
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add "${GITOPS_MANIFEST_PATH}"
 
-          # Avoid failing if no changes
+          # Exit successfully if there is nothing new to commit
           git diff --cached --quiet && echo "No changes to commit" && exit 0
 
           git commit -m "Update demo-app image tag to ${VERSION}"
 
-      # Step 19: Push updated manifest (triggers ArgoCD deployment)
+      # Step 20: Push the updated manifest so ArgoCD can deploy it
       - name: Push GitOps manifest change
         shell: bash
         run: |
