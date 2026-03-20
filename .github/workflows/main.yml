@@ -54,7 +54,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flake8 pytest
+          pip install flake8 pytest pytest-cov
 
       # Step 5: Run linting (code quality checks)
       - name: Run lint checks
@@ -108,6 +108,7 @@ jobs:
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
             -Dsonar.sources=.
             -Dsonar.python.version=3.9
+            -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.qualitygate.wait=false
             -Dsonar.qualitygate.timeout=300
 
