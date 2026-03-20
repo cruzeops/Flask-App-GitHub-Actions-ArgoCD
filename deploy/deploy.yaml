@@ -17,3 +17,10 @@ spec:
         image: cruzeops/demo-app:v0320002214
         ports:
         - containerPort: 5001
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+          requests:
+            cpu: "250m"
+            memory: "128Mi"
