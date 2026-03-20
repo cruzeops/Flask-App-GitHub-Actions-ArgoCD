@@ -17,9 +17,11 @@ jobs:
     env:
       VERSION: ""
       IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/demo-app
-      GITOPS_REPO: ${{ vars.ARGOCD_REPO || 'cruzeops/demo-app-gitops' }}
-      GITOPS_BRANCH: ${{ vars.ARGOCD_BRANCH || 'main' }}
-      GITOPS_MANIFEST_PATH: ${{ vars.ARGOCD_MANIFEST_PATH || 'deploy.yaml' }}
+      GITOPS_REPO: ${{ vars.ARGOCD_REPO  }}
+      GITOPS_BRANCH: ${{ vars.ARGOCD_BRANCH }}
+      GITOPS_MANIFEST_PATH: ${{ vars.ARGOCD_MANIFEST_PATH }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
 
     steps:
     # checkout the code, set up Python, install dependencies, run tests, and build the Docker image
@@ -59,7 +61,20 @@ jobs:
         run: |
           VERSION=v$(date +'%m%d%H%M%S')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-
+    
+    # SonarQube scan the code, and fail the build if the quality gate fails
+      - name: SonarQube Cloud Scan
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.sources=.
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
+          
     # Build the Docker image
       - name: Build Docker image
         run: |
@@ -69,6 +84,17 @@ jobs:
       - name: Push Docker image
         run: |
           docker push ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+
+    # Scan the Docker image for vulnerabilities using Trivy, and fail the build if any CRITICAL or HIGH severity vulnerabilities are found
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
 
     # Checkout the separate GitOps repository that ArgoCD watches
       - name: Checkout GitOps repo
