@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - master              # Run automatically when code is pushed to master
+    paths-ignore:
+            - 'manifest/**' # ignore changes to manifest files to prevent loop
   workflow_dispatch:        # Allow manual execution from the GitHub Actions UI
 
 permissions:
